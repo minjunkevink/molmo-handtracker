@@ -1,0 +1,23 @@
+# TODO: fix the paths
+sam_path: /scr/aliang80/Grounded-SAM-2
+sam2_checkpoint: checkpoints/sam2.1_hiera_large.pt
+model_cfg: configs/sam2.1/sam2.1_hiera_l.yaml
+model_id: IDEA-Research/grounding-dino-tiny
+
+# `video_dir` a directory of JPEG frames with filenames like `<frame_index>.jpg`
+video_dir: notebooks/videos/robot
+video_file: data/videos/2024-09-21_13-26-56_raw_traj_group0_traj0.mp4
+
+# setup the input image and text prompt for SAM 2 and Grounding DINO
+    # VERY important: text queries need to be lowercased + end with a dot
+text: "robot. bowl."
+device: cuda
+
+base_path: /scr/aliang80/continuous_lam/clam/scripts/optical_flow/
+cotracker_ckpt: scaled_offline.pth
+seg_mask_file: data/videos/segm_mask.npy
+grid_size: 10
+
+save_tracking_video: True
+tracking_dir: results
+tracking_filename: segm_grid
