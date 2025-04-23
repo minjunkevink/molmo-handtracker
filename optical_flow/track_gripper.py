@@ -25,9 +25,9 @@ def track_gripper(
 ):
     """
     Track a single gripper point through the video and record its relative movement.
-    
+    e
     Args:
-        video_path: Path to video file
+        video_path: Path to video fil
         output_dir: Directory to save results
         gripper_point: (x, y) coordinates of the gripper in the first frame
         device: Device to run inference on ('cuda' or 'cpu')
@@ -189,7 +189,7 @@ def track_gripper(
             cumulative_displacements[i] = cumulative_displacements[i-1]
     
     # Prepare data for HDF5 storage
-    hdf5_path = os.path.join(video_output_dir, f"{video_name}_gripper_tracking.hdf5")
+    hdf5_path = os.path.join('/scr/shared/datasets/LIBERO/libero_10_2D', f"{video_name}_2D.hdf5")
     
     with h5py.File(hdf5_path, 'w') as f:
         # Create metadata group
@@ -216,6 +216,21 @@ def track_gripper(
         
         # Store cumulative displacements
         tracking.create_dataset('cumulative_displacements', data=cumulative_displacements, compression='gzip')
+        
+        # Add point_tracking_results compatible format (similar to compute_flow_features)
+        flow_features = f.create_group('flow_features')
+        
+        # Create a mask (all ones since we're tracking a single point reliably)
+        points_mask = np.ones_like(visibility_np)
+        
+        # Store in the format used by compute_flow_features
+        flow_features.create_dataset('points', data=tracks_np.reshape(1, num_frames, 2), compression='gzip')
+        flow_features.create_dataset('points_visibility', data=visibility_np.reshape(1, num_frames), compression='gzip')
+        flow_features.create_dataset('points_mask', data=points_mask.reshape(1, num_frames), compression='gzip')
+        flow_features.create_dataset('points_normalized', data=tracks_normalized.reshape(1, num_frames, 2), compression='gzip')
+        
+        # Add frame-to-frame displacements in compute_flow_features format
+        flow_features.create_dataset('points_displacements', data=displacements.reshape(1, num_frames, 2), compression='gzip')
     
     print(f"Tracking data saved to: {hdf5_path}")
     
