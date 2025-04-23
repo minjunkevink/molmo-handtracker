@@ -53,32 +53,9 @@ Optional arguments:
 - `--point1x` and `--point1y`: First point coordinates (default: 55.0, 22.0)
 - `--point2x` and `--point2y`: Second point coordinates (default: 70.0, 22.0)
 
-## Project Structure
-
-- **preprocessing/**: Tools for data preprocessing
-  - `hdf5_to_mp4.py`: Converts HDF5 datasets to MP4 videos
-- **optical_flow/**: Optical flow tracking implementation
-  - `compute_flow.py`: Implements bidirectional tracking using CoTracker
-- **notebooks/**: Jupyter notebooks for examples and experimentation
-  - `cotracker.ipynb`: Example of using CoTracker
-
-## Example Workflow
-
-1. Convert HDF5 demonstration files to MP4 videos
-2. Run optical flow tracking on the videos to track hand movements
-3. Analyze the tracking results or use them for further processing
-
 ## Requirements
 
 - Python 3.10+
 - PyTorch
 - CUDA-capable GPU (recommended)
 - Dependencies listed in environment.yml
-
-## License
-
-[License information here]
-
-## Acknowledgements
-
-- This project uses [CoTracker](https://github.com/facebookresearch/co-tracker) for optical flow tracking 
