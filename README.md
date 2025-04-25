@@ -31,6 +31,11 @@ pip install h5py opencv-python matplotlib tqdm
 pip install imageio imageio-ffmpeg
 ```
 
+### Module Installation
+```bash
+cd modules && bash install_submodules.sh
+```
+
 ### CoTracker Installation
 
 This project uses [CoTracker](https://github.com/facebookresearch/co-tracker) for optical flow tracking. It will be automatically downloaded via PyTorch Hub when used.

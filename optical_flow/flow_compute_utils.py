@@ -1,31 +1,59 @@
 #!/usr/bin/env python3
+"""
+Gripper Tracking Script
+
+Tracks a single point (gripper midpoint) through a video and stores its
+relative displacement between frames in HDF5 format.
+"""
+
 import torch
 import imageio
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+import h5py
 import argparse
-import glob
+from pathlib import Path
 from tqdm import tqdm
 from cotracker.utils.visualizer import Visualizer
+import glob
 
-
-def process_video(video_path, output_dir, point1=None, point2=None):
+def track_gripper(
+    video_path,
+    output_dir,
+    gripper_point=(104, 24),  
+    device=None,
+    disable_visualization=False,
+    output_to_custom_path=False,
+    custom_output_path=None
+):
     """
-    Process a single video with bidirectional tracking.
+    Track a single gripper point through the video and record its relative movement.
     
     Args:
-        video_path (str): Path to the video file
-        output_dir (str): Directory to save the tracking results
-        point1 (tuple, optional): (x, y) coordinates for the first tracking point
-        point2 (tuple, optional): (x, y) coordinates for the second tracking point
+        video_path: Path to video file
+        output_dir: Directory to save results
+        gripper_point: (x, y) coordinates of the gripper in the first frame
+        device: Device to run inference on ('cuda' or 'cpu')
+        disable_visualization: If True, skips generating visualizations
+        output_to_custom_path: If True, saves HDF5 file to custom_output_path
+        custom_output_path: Custom path to save HDF5 file (if output_to_custom_path is True)
+    
+    Returns:
+        Tuple containing:
+        - Path to the saved HDF5 file
+        - NumPy array of shape [num_frames, 2] containing (x,y) coordinates for each frame
     """
-    # Ensure output directory exists
+    # Create output directory
     os.makedirs(output_dir, exist_ok=True)
     
-    # Load the CoTracker model
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # Set device
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
+    
+    # Load the CoTracker model
+    print("Loading CoTracker model...")
     cotracker = torch.hub.load("facebookresearch/co-tracker", "cotracker3_offline").to(device)
     
     # Load video
@@ -33,255 +61,386 @@ def process_video(video_path, output_dir, point1=None, point2=None):
     reader = imageio.get_reader(video_path)
     frames = [np.array(im) for im in reader]
     
-    # Create a video-specific subdirectory for results
+    # Create video-specific output directory
     video_name = os.path.splitext(os.path.basename(video_path))[0]
     video_output_dir = os.path.join(output_dir, video_name)
     os.makedirs(video_output_dir, exist_ok=True)
     
-    # Check frame shape
-    print(f"Frame shape: {frames[0].shape}")
+    # Get video dimensions
     height, width = frames[0].shape[0:2]
+    num_frames = len(frames)
+    print(f"Video dimensions: {width}x{height}, {num_frames} frames")
     
-    # Define tracking points
-    # If no points are provided, use default points or ask for user input
-    if point1 is None:
-        point1_x, point1_y = 55.0, 22.0
-    else:
-        point1_x, point1_y = point1
+    # Define gripper point
+    gripper_x, gripper_y = gripper_point
+    
+    # Make sure point is within frame bounds
+    if gripper_x < 0 or gripper_x >= width or gripper_y < 0 or gripper_y >= height:
+        print(f"Warning: Gripper point {gripper_point} is outside frame bounds. Adjusting...")
+        gripper_x = min(max(0, gripper_x), width - 1)
+        gripper_y = min(max(0, gripper_y), height - 1)
+    
+    # Visualize the gripper point on the first frame
+    if not disable_visualization:
+        plt.figure(figsize=(10, 10))
+        plt.imshow(frames[0])
+        plt.scatter(gripper_x, gripper_y, c='red', s=100, marker='x')
+        plt.text(gripper_x+10, gripper_y+10, f"Gripper ({gripper_x}, {gripper_y})", 
+                color='white', fontsize=12, bbox=dict(facecolor='red', alpha=0.5))
         
-    if point2 is None:
-        point2_x, point2_y = 70.0, 22.0
-    else:
-        point2_x, point2_y = point2
+        # Add zoomed inset
+        from mpl_toolkits.axes_grid1.inset_locator import zoomed_inset_axes, mark_inset
+        
+        # Zoom factor depends on image size
+        zoom_factor = min(8, min(width, height) / 40)
+        
+        # Create zoomed inset
+        axins = zoomed_inset_axes(plt.gca(), zoom=zoom_factor, loc=2)  # Upper left
+        axins.imshow(frames[0])
+        axins.scatter(gripper_x, gripper_y, c='red', s=100, marker='x')
+        
+        # Set limits for zoom region
+        zoom_radius = min(20, min(width, height) / 8)
+        axins.set_xlim(gripper_x - zoom_radius, gripper_x + zoom_radius)
+        axins.set_ylim(gripper_y + zoom_radius, gripper_y - zoom_radius)  # Reversed y-axis
+        axins.set_xticks([])
+        axins.set_yticks([])
+        mark_inset(plt.gca(), axins, loc1=1, loc2=3, fc="none", ec="red")
+        
+        plt.title("Gripper Point Verification")
+        plt.savefig(os.path.join(video_output_dir, "gripper_point.png"))
+        plt.close()
     
+    # Initialize tracking point
     initial_frame = 0
-    initial_points = torch.tensor([[[initial_frame, point1_x, point1_y], 
-                                   [initial_frame, point2_x, point2_y]]], dtype=torch.float32).to(device)
-    print(f"Initial points shape: {initial_points.shape}, values: {initial_points.cpu().numpy()}")
+    initial_point = torch.tensor([[[initial_frame, gripper_x, gripper_y]]], dtype=torch.float32).to(device)
+    print(f"Initial point: ({gripper_x}, {gripper_y})")
     
-    # Visualize the initial points on the first frame
-    plt.figure(figsize=(10, 10))
-    plt.imshow(frames[0])
-    
-    # Plot point 1
-    plt.scatter(point1_x, point1_y, c='red', s=100, marker='x')
-    plt.text(point1_x+10, point1_y+10, f"Point 1 ({point1_x}, {point1_y})", 
-             color='white', fontsize=12, bbox=dict(facecolor='red', alpha=0.5))
-    
-    # Plot point 2
-    plt.scatter(point2_x, point2_y, c='blue', s=100, marker='x')
-    plt.text(point2_x+10, point2_y+10, f"Point 2 ({point2_x}, {point2_y})", 
-             color='white', fontsize=12, bbox=dict(facecolor='blue', alpha=0.5))
-    
-    # Add zoomed insets for both points
-    from mpl_toolkits.axes_grid1.inset_locator import zoomed_inset_axes, mark_inset
-    
-    # Zoomed inset for point 1
-    axins1 = zoomed_inset_axes(plt.gca(), zoom=4, loc=2)  # Upper left
-    axins1.imshow(frames[0])
-    axins1.scatter(point1_x, point1_y, c='red', s=100, marker='x')
-    axins1.set_xlim(point1_x-20, point1_x+20)
-    axins1.set_ylim(point1_y+20, point1_y-20)  # Reversed y-axis
-    axins1.set_xticks([])
-    axins1.set_yticks([])
-    mark_inset(plt.gca(), axins1, loc1=1, loc2=3, fc="none", ec="red")
-    
-    # Zoomed inset for point 2
-    axins2 = zoomed_inset_axes(plt.gca(), zoom=4, loc=3)  # Lower left
-    axins2.imshow(frames[0])
-    axins2.scatter(point2_x, point2_y, c='blue', s=100, marker='x')
-    axins2.set_xlim(point2_x-20, point2_x+20)
-    axins2.set_ylim(point2_y+20, point2_y-20)  # Reversed y-axis
-    axins2.set_xticks([])
-    axins2.set_yticks([])
-    mark_inset(plt.gca(), axins2, loc1=2, loc2=4, fc="none", ec="blue")
-    
-    plt.title("Initial Points Verification")
-    plt.savefig(os.path.join(video_output_dir, "initial_points.png"))
-    plt.close()
-    
-    # Prepare the video tensor
+    # Prepare video tensor
     frames_array = np.stack(frames)
-    video = torch.tensor(frames_array).permute(0, 3, 1, 2)[None].float().to(device)
+    video_tensor = torch.tensor(frames_array).permute(0, 3, 1, 2)[None].float().to(device)
+    print(f"Video tensor shape: {video_tensor.shape}")
     
-    print(f"Video tensor shape: {video.shape}")
-    
-    # Implement bidirectional tracking
+    # Perform bidirectional tracking
     print("Running forward tracking...")
     with torch.no_grad():
         # Forward tracking
-        pred_tracks_fwd, pred_visibility_fwd = cotracker(video, queries=initial_points)
+        tracks_fwd, visibility_fwd = cotracker(video_tensor, queries=initial_point, backward_tracking=False)
         
-        # Reverse the video for backward tracking
-        video_reversed = torch.flip(video, dims=[1])  # Flip along the temporal dimension
+        # Reverse video for backward tracking
+        video_reversed = torch.flip(video_tensor, dims=[1])
         
         print("Running backward tracking...")
-        last_frame_idx = video.shape[1] - 1
+        # Get position at last frame from forward tracking
+        last_frame_position = tracks_fwd[:, -1, :, :]
+    
+    # Convert to numpy arrays
+    tracks_np = tracks_fwd[0, :, 0, :].cpu().numpy()  # Shape: [num_frames, 2]
+    visibility_np = visibility_fwd[0, :, 0].cpu().numpy()  # Shape: [num_frames]
+    
+    # Calculate relative displacements between consecutive frames
+    displacements = np.zeros_like(tracks_np)  # Initialize with zeros
+    
+    # First frame has no displacement (relative to itself)
+    displacements[0] = [0, 0]
+    
+    # Calculate displacement for each subsequent frame
+    for i in range(1, num_frames):
+        if visibility_np[i] > 0.5 and visibility_np[i-1] > 0.5:
+            # If both current and previous frames have visible points,
+            # calculate the displacement
+            displacements[i] = tracks_np[i] - tracks_np[i-1]
+        else:
+            # If either frame has low visibility, set displacement to 0
+            displacements[i] = [0, 0]
+    
+    # Normalize coordinates
+    tracks_normalized = tracks_np / np.array([width, height])
+    
+    # Calculate cumulative displacement (from first frame)
+    cumulative_displacements = np.zeros_like(tracks_np)
+    for i in range(1, num_frames):
+        if visibility_np[i] > 0.5:
+            cumulative_displacements[i] = tracks_np[i] - tracks_np[0]
+        else:
+            # If current frame has low visibility, use previous cumulative displacement
+            cumulative_displacements[i] = cumulative_displacements[i-1]
+    
+    # Prepare data for HDF5 storage
+    if output_to_custom_path and custom_output_path:
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(custom_output_path), exist_ok=True)
+        # Use custom filename
+        hdf5_path = os.path.join(custom_output_path, f"{video_name}_2D.hdf5")
+    else:
+        hdf5_path = os.path.join(video_output_dir, f"{video_name}_gripper_tracking.hdf5")
+    
+    with h5py.File(hdf5_path, 'w') as f:
+        # Create metadata group
+        metadata = f.create_group('metadata')
+        metadata.attrs['filename'] = video_path
+        metadata.attrs['width'] = width
+        metadata.attrs['height'] = height
+        metadata.attrs['num_frames'] = num_frames
+        metadata.attrs['gripper_x'] = gripper_x
+        metadata.attrs['gripper_y'] = gripper_y
         
-        # Get the predicted positions at the last frame from forward tracking
-        last_frame_positions = pred_tracks_fwd[:, -1, :, :]  # Shape: [B, N, 2]
+        # Create tracking group
+        tracking = f.create_group('tracking')
         
-        # Create new query points for backward tracking starting from the last frame
-        backward_initial_points = torch.cat([
-            torch.zeros_like(last_frame_positions[:, :, :1]) + initial_frame,  # t=0 for first frame in reversed video
-            last_frame_positions
-        ], dim=2)
+        # Store raw tracks
+        tracking.create_dataset('positions', data=tracks_np, compression='gzip')
+        tracking.create_dataset('visibility', data=visibility_np, compression='gzip')
         
-        # Run backward tracking
-        pred_tracks_bwd, pred_visibility_bwd = cotracker(video_reversed, queries=backward_initial_points)
+        # Store normalized coordinates
+        tracking.create_dataset('positions_normalized', data=tracks_normalized, compression='gzip')
         
-        # Flip the backward tracks to align with forward video timeline
-        pred_tracks_bwd = torch.flip(pred_tracks_bwd, dims=[1])
-        pred_visibility_bwd = torch.flip(pred_visibility_bwd, dims=[1])
+        # Store frame-to-frame displacements (key data)
+        tracking.create_dataset('displacements', data=displacements, compression='gzip')
+        
+        # Store cumulative displacements
+        tracking.create_dataset('cumulative_displacements', data=cumulative_displacements, compression='gzip')
+        
+        # Add point_tracking_results compatible format (similar to compute_flow_features)
+        flow_features = f.create_group('flow_features')
+        
+        # Create a mask (all ones since we're tracking a single point reliably)
+        points_mask = np.ones_like(visibility_np)
+        
+        # Store in the format used by compute_flow_features
+        flow_features.create_dataset('points', data=tracks_np.reshape(1, num_frames, 2), compression='gzip')
+        flow_features.create_dataset('points_visibility', data=visibility_np.reshape(1, num_frames), compression='gzip')
+        flow_features.create_dataset('points_mask', data=points_mask.reshape(1, num_frames), compression='gzip')
+        flow_features.create_dataset('points_normalized', data=tracks_normalized.reshape(1, num_frames, 2), compression='gzip')
+        
+        # Add frame-to-frame displacements in compute_flow_features format
+        flow_features.create_dataset('points_displacements', data=displacements.reshape(1, num_frames, 2), compression='gzip')
     
-    # Combine forward and backward tracks with different strategies
-    print("Combining forward and backward tracks...")
+    print(f"Tracking data saved to: {hdf5_path}")
     
-    # 1. Average combination - simple but effective
-    combined_tracks_avg = (pred_tracks_fwd + pred_tracks_bwd) / 2.0
+    # Visualize the tracking results if not disabled
+    if not disable_visualization:
+        # 1. Create MP4 visualization using CoTracker visualizer
+        vis = Visualizer(save_dir=video_output_dir, pad_value=120, linewidth=3)
+        vis.visualize(
+            video=video_tensor,
+            tracks=tracks_fwd,
+            visibility=visibility_fwd,
+            filename=f"{video_name}_tracking",
+            save_video=True,
+            opacity=1.0
+        )
+        
+        # 2. Create displacement plot
+        plt.figure(figsize=(12, 8))
+        frames = np.arange(num_frames)
+        
+        # Plot X displacements
+        plt.subplot(2, 1, 1)
+        plt.plot(frames, displacements[:, 0], 'r-', label='X Displacement')
+        plt.title('Gripper X Displacement Between Frames')
+        plt.xlabel('Frame Number')
+        plt.ylabel('X Displacement (pixels)')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        
+        # Plot Y displacements
+        plt.subplot(2, 1, 2)
+        plt.plot(frames, displacements[:, 1], 'b-', label='Y Displacement')
+        plt.title('Gripper Y Displacement Between Frames')
+        plt.xlabel('Frame Number')
+        plt.ylabel('Y Displacement (pixels)')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(video_output_dir, f"{video_name}_displacements.png"))
+        plt.close()
+        
+        # 3. Create trajectory plot
+        plt.figure(figsize=(10, 10))
+        
+        # Plot trajectory
+        visible_mask = visibility_np > 0.5
+        plt.scatter(tracks_np[0, 0], tracks_np[0, 1], c='green', s=100, marker='o', label='Start')
+        plt.scatter(tracks_np[-1, 0], tracks_np[-1, 1], c='red', s=100, marker='s', label='End')
+        plt.plot(tracks_np[visible_mask, 0], tracks_np[visible_mask, 1], 'b-', alpha=0.7, label='Trajectory')
+        
+        # Add arrows to show direction
+        arrow_frames = list(range(0, num_frames, max(1, num_frames // 20)))
+        for i in arrow_frames:
+            if i > 0 and visibility_np[i] > 0.5 and visibility_np[i-1] > 0.5:
+                dx = tracks_np[i, 0] - tracks_np[i-1, 0]
+                dy = tracks_np[i, 1] - tracks_np[i-1, 1]
+                
+                # Only draw arrow if there's significant movement
+                if dx**2 + dy**2 > 1.0:
+                    plt.arrow(tracks_np[i-1, 0], tracks_np[i-1, 1], dx, dy, 
+                             head_width=3, head_length=5, fc='red', ec='red', alpha=0.7)
+        
+        plt.xlim(0, width)
+        plt.ylim(height, 0)  # Reversed y-axis for image coordinates
+        plt.title('Gripper Trajectory')
+        plt.xlabel('X (pixels)')
+        plt.ylabel('Y (pixels)')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        
+        plt.savefig(os.path.join(video_output_dir, f"{video_name}_trajectory.png"))
+        plt.close()
+        
+        print(f"Visualizations saved to: {video_output_dir}")
+    else:
+        print("Visualizations disabled.")
     
-    # Use maximum of visibilities - need to ensure tensors for both arguments
-    combined_visibility_avg = torch.maximum(pred_visibility_fwd, pred_visibility_bwd)  # Use maximum visibility
-    
-    # 2. Weighted combination based on distance to initial frame
-    # Points closer to the initial frame get higher weight from forward tracking
-    T = video.shape[1]
-    frame_indices = torch.arange(T, device=device).view(1, T, 1, 1).float()
-    weights_fwd = 1.0 - frame_indices / (T - 1)  # From 1.0 at first frame to 0.0 at last frame
-    weights_bwd = frame_indices / (T - 1)        # From 0.0 at first frame to 1.0 at last frame
-    
-    # Apply weights to get weighted combination
-    combined_tracks_weighted = (weights_fwd * pred_tracks_fwd + weights_bwd * pred_tracks_bwd) / (weights_fwd + weights_bwd)
-    
-    # For visibility, create a tensor with the minimum value we want to maintain
-    min_visibility = torch.ones_like(pred_visibility_fwd) * 0.3
-    
-    # For visibility, we use a more conservative approach with tensor operations
-    combined_visibility_weighted = torch.minimum(
-        torch.maximum(pred_visibility_fwd, min_visibility),  # Ensure some minimum visibility
-        torch.maximum(pred_visibility_bwd, min_visibility)   # Ensure some minimum visibility
-    )
-    
-    # Let's use the weighted combination for visualization
-    final_tracks = combined_tracks_weighted
-    final_visibility = combined_visibility_weighted
-    
-    print(f"Forward tracks shape: {pred_tracks_fwd.shape}")
-    print(f"Backward tracks shape: {pred_tracks_bwd.shape}")
-    print(f"Combined tracks shape: {final_tracks.shape}")
-    
-    # Save the tracking data for later use
-    torch.save({
-        'forward_tracks': pred_tracks_fwd.cpu(),
-        'forward_visibility': pred_visibility_fwd.cpu(),
-        'backward_tracks': pred_tracks_bwd.cpu(),
-        'backward_visibility': pred_visibility_bwd.cpu(),
-        'combined_tracks': final_tracks.cpu(),
-        'combined_visibility': final_visibility.cpu(),
-        'initial_points': initial_points.cpu(),
-        'video_shape': video.shape
-    }, os.path.join(video_output_dir, f"{video_name}_tracking_data.pth"))
-    
-    # Visualize the tracking results - forward, backward, and combined
-    # Visualize forward tracking
-    vis_fwd = Visualizer(save_dir=video_output_dir, pad_value=120, linewidth=3)
-    vis_fwd.visualize(
-        video=video, 
-        tracks=pred_tracks_fwd, 
-        visibility=pred_visibility_fwd, 
-        filename=f"{video_name}_forward",
-        save_video=True,
-        opacity=1.0
-    )
-    
-    # Visualize backward tracking
-    vis_bwd = Visualizer(save_dir=video_output_dir, pad_value=120, linewidth=3)
-    vis_bwd.visualize(
-        video=video, 
-        tracks=pred_tracks_bwd, 
-        visibility=pred_visibility_bwd, 
-        filename=f"{video_name}_backward",
-        save_video=True,
-        opacity=1.0
-    )
-    
-    # Visualize combined tracking
-    vis_combined = Visualizer(save_dir=video_output_dir, pad_value=120, linewidth=3)
-    vis_combined.visualize(
-        video=video, 
-        tracks=final_tracks, 
-        visibility=final_visibility, 
-        filename=f"{video_name}_bidirectional",
-        save_video=True,
-        opacity=1.0
-    )
-    
-    print(f"Tracking visualizations saved to {video_output_dir}/:")
-    print(f" - Forward tracking: {video_name}_forward.mp4")
-    print(f" - Backward tracking: {video_name}_backward.mp4")
-    print(f" - Bidirectional (combined) tracking: {video_name}_bidirectional.mp4")
-    
-    # Return tracking results for future use if needed
-    return {
-        'forward_tracks': pred_tracks_fwd,
-        'forward_visibility': pred_visibility_fwd,
-        'backward_tracks': pred_tracks_bwd,
-        'backward_visibility': pred_visibility_bwd,
-        'combined_tracks': final_tracks,
-        'combined_visibility': final_visibility
-    }
+    # Return both the HDF5 path and the coordinates array
+    return hdf5_path, tracks_np
 
+def process_folder(
+    input_dir,
+    output_dir,
+    gripper_point=(64, 64),
+    device=None,
+    disable_visualization=False,
+    output_to_custom_path=False,
+    custom_output_path=None
+):
+    """
+    Process all MP4 files in a directory through track_gripper.
+    
+    Args:
+        input_dir: Directory containing MP4 files to process
+        output_dir: Base directory to save results
+        gripper_point: (x, y) coordinates of the gripper in the first frame
+        device: Device to run inference on ('cuda' or 'cpu')
+        disable_visualization: If True, skips generating visualizations
+        output_to_custom_path: If True, saves HDF5 files to custom_output_path
+        custom_output_path: Custom path to save HDF5 files (if output_to_custom_path is True)
+    
+    Returns:
+        Dictionary mapping video filenames to tuples of:
+        - Path to the saved HDF5 file
+        - NumPy array of shape [num_frames, 2] containing (x,y) coordinates for each frame
+    """
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    if output_to_custom_path and custom_output_path:
+        os.makedirs(custom_output_path, exist_ok=True)
+    
+    # Get all MP4 files in the input directory
+    mp4_files = glob.glob(os.path.join(input_dir, "*.mp4"))
+    
+    if not mp4_files:
+        print(f"No MP4 files found in {input_dir}")
+        return {}
+    
+    print(f"Found {len(mp4_files)} MP4 files to process")
+    
+    # Process each file
+    results = {}
+    for mp4_file in tqdm(mp4_files, desc="Processing videos"):
+        try:
+            # Extract the video name
+            video_name = os.path.splitext(os.path.basename(mp4_file))[0]
+            print(f"\nProcessing {video_name}...")
+            
+            # Run gripper tracking
+            result_file, tracks_np = track_gripper(
+                video_path=mp4_file,
+                output_dir=output_dir,
+                gripper_point=gripper_point,
+                device=device,
+                disable_visualization=disable_visualization,
+                output_to_custom_path=output_to_custom_path,
+                custom_output_path=custom_output_path
+            )
+            
+            # Store both the HDF5 path and the coordinates array
+            results[video_name] = (result_file, tracks_np)
+            print(f"Completed processing {video_name}")
+            
+        except Exception as e:
+            print(f"Error processing {mp4_file}: {str(e)}")
+    
+    return results
 
 def main():
-    parser = argparse.ArgumentParser(description='Compute bidirectional optical flow on videos using CoTracker')
-    parser.add_argument('--input', required=True, help='Path to a video file or directory containing videos')
-    parser.add_argument('--output', default='tracking_results', help='Directory to save tracking results')
-    parser.add_argument('--point1x', type=float, default=55.0, help='X coordinate of the first tracking point')
-    parser.add_argument('--point1y', type=float, default=22.0, help='Y coordinate of the first tracking point')
-    parser.add_argument('--point2x', type=float, default=70.0, help='X coordinate of the second tracking point')
-    parser.add_argument('--point2y', type=float, default=22.0, help='Y coordinate of the second tracking point')
+    parser = argparse.ArgumentParser(description='Track a gripper point through video(s) and record displacements')
+    
+    # Input options
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('--input', help='Path to a single video file')
+    group.add_argument('--input_dir', help='Directory containing multiple MP4 files to process')
+    
+    # Output options
+    parser.add_argument('--output', default='gripper_tracking_results', 
+                        help='Output directory for tracking results')
+    parser.add_argument('--output_to_custom_path', action='store_true', 
+                        help='Save HDF5 files to a custom path instead of output subdirectories')
+    parser.add_argument('--custom_output_path', 
+                        help='Custom path to save HDF5 files when using --output_to_custom_path')
+    
+    # Gripper point coordinates
+    parser.add_argument('--x', type=float, default=64, 
+                        help='X coordinate of gripper point in first frame')
+    parser.add_argument('--y', type=float, default=64, 
+                        help='Y coordinate of gripper point in first frame')
+    
+    # Processing options
+    parser.add_argument('--device', choices=['cuda', 'cpu'], 
+                        help='Device to run inference on')
+    parser.add_argument('--disable_visualization', action='store_true', 
+                        help='Disable rendering of visualizations for faster processing')
+    
     args = parser.parse_args()
     
-    # Define tracking points from arguments
-    point1 = (args.point1x, args.point1y)
-    point2 = (args.point2x, args.point2y)
+    # Validation
+    if args.output_to_custom_path and not args.custom_output_path:
+        print("Error: --custom_output_path must be specified when using --output_to_custom_path")
+        return 1
     
-    # Determine if input is a file or directory
-    if os.path.isfile(args.input):
-        if args.input.lower().endswith(('.mp4', '.avi', '.mov', '.mkv')):
-            print(f"Processing single video: {args.input}")
-            process_video(args.input, args.output, point1, point2)
-        else:
-            print(f"Error: {args.input} is not a supported video file format.")
-            print("Supported formats: .mp4, .avi, .mov, .mkv")
-            return
-    elif os.path.isdir(args.input):
-        print(f"Processing all videos in directory: {args.input}")
-        # Find all video files in the directory
-        video_files = []
-        for ext in ['.mp4', '.avi', '.mov', '.mkv']:
-            video_files.extend(glob.glob(os.path.join(args.input, f'*{ext}')))
+    # Process single file or directory
+    if args.input:
+        if not os.path.isfile(args.input):
+            print(f"Error: Input file '{args.input}' not found")
+            return 1
         
-        if not video_files:
-            print(f"No video files found in {args.input}")
-            return
-        
-        print(f"Found {len(video_files)} videos to process:")
-        for video in video_files:
-            print(f" - {os.path.basename(video)}")
-            
-        # Process each video
-        for video_path in tqdm(video_files, desc="Processing videos"):
-            try:
-                process_video(video_path, args.output, point1, point2)
-            except Exception as e:
-                print(f"Error processing {video_path}: {str(e)}")
+        # Run gripper tracking on single file
+        hdf5_path, coordinates = track_gripper(
+            video_path=args.input,
+            output_dir=args.output,
+            gripper_point=(args.x, args.y),
+            device=args.device,
+            disable_visualization=args.disable_visualization,
+            output_to_custom_path=args.output_to_custom_path,
+            custom_output_path=args.custom_output_path
+        )
+        print(f"Saved tracking data to: {hdf5_path}")
+        print(f"Tracked coordinates shape: {coordinates.shape}")
     else:
-        print(f"Error: {args.input} is not a valid file or directory.")
-        return
+        if not os.path.isdir(args.input_dir):
+            print(f"Error: Input directory '{args.input_dir}' not found")
+            return 1
+        
+        # Process all files in directory
+        results = process_folder(
+            input_dir=args.input_dir,
+            output_dir=args.output,
+            gripper_point=(args.x, args.y),
+            device=args.device,
+            disable_visualization=args.disable_visualization,
+            output_to_custom_path=args.output_to_custom_path,
+            custom_output_path=args.custom_output_path
+        )
+        
+        print(f"Processed {len(results)} videos successfully")
+        for video_name, (hdf5_path, coordinates) in results.items():
+            print(f"Video: {video_name}, Coordinates shape: {coordinates.shape}")
     
-    print("All processing complete!")
-
+    print("Processing complete!")
+    return 0
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.exit(main()) 
