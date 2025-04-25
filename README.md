@@ -1,13 +1,21 @@
-# MOLMO Hand Tracker
+# MOLMO CoTrack
 
-Tools for tracking hand movements using optical flow techniques.
+A toolkit for tracking hand movements in videos using advanced computer vision techniques, including CoTracker for optical flow tracking and Segment Anything Model (SAM) for object segmentation.
+
+## Features
+
+- **Point Tracking**: Track specific points (like hand/gripper positions) through video sequences
+- **Bidirectional Tracking**: Uses CoTracker to perform both forward and backward point tracking with automatic reconciliation
+- **HDF5 to MP4 Conversion**: Extract RGB frames from HDF5 datasets and convert them to MP4 videos
+- **Visualization Tools**: Generate visualization videos showing tracking results
+- **Coordinate Export**: Extract (x,y) coordinates for every tracked frame
 
 ## Installation
 
 ### 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/molmo-handtracker.git
-cd molmo-handtracker
+git clone https://github.com/minjunkevink/molmo_cotrack.git
+cd molmo_cotrack
 ```
 
 ### 2. Install CoTracker dependency:
@@ -66,18 +74,14 @@ python -m optical_flow.flow_compute_utils --input path/to/video.mp4 --x 104 --y 
 
 # Process all videos in a directory
 python -m optical_flow.flow_compute_utils --input_dir path/to/videos --x 104 --y 24
+
+# Run the example script
+python examples/track_video.py --input path/to/video.mp4 --x 104 --y 24
 ```
-
-## Features
-
-- **HDF5 to MP4 Conversion**: Extract RGB frames from HDF5 datasets and convert them to MP4 videos
-- **Bidirectional Tracking**: Uses CoTracker to perform both forward and backward point tracking with automatic reconciliation
-- **Visualization Tools**: Generate visualization videos showing tracking results
-- **Jupyter Notebook Support**: Example notebooks for testing and experimenting with the trackers
 
 ## Requirements
 
 - Python 3.10+
 - PyTorch
 - CUDA-capable GPU (recommended)
-- Dependencies listed in environment.yml
+- Dependencies listed in setup.py

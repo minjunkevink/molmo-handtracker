@@ -1,0 +1,18 @@
+Metadata-Version: 2.2
+Name: molmo_cotrack
+Version: 0.1.0
+Summary: Hand tracking tools using optical flow with CoTracker and SAM for MOLMO project
+Home-page: https://github.com/minjunkevink/molmo_cotrack
+Author: Kevin Kim
+Author-email: kimkj@usc.edu
+Requires-Dist: torch
+Requires-Dist: imageio
+Requires-Dist: numpy
+Requires-Dist: matplotlib
+Requires-Dist: h5py
+Requires-Dist: tqdm
+Dynamic: author
+Dynamic: author-email
+Dynamic: home-page
+Dynamic: requires-dist
+Dynamic: summary

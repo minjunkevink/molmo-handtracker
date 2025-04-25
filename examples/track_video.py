@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
-Example script showing how to use track_gripper from another project.
+Example script showing how to use the MOLMO CoTrack library.
+
+This example demonstrates how to track a point in a video using the
+track_gripper function and visualize the tracked path.
 
 Usage:
     python track_video.py --input /path/to/video.mp4 --x 104 --y 24

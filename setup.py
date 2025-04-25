@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="molmo-handtracker",
+    name="molmo_cotrack",
     version="0.1.0",
     packages=find_packages(),
     install_requires=[
@@ -14,8 +14,8 @@ setup(
         # Note: cotracker needs to be installed separately:
         # pip install git+https://github.com/facebookresearch/co-tracker.git
     ],
-    description="Hand tracking tools using optical flow",
+    description="Hand tracking tools using optical flow with CoTracker and SAM for MOLMO project",
     author="Kevin Kim",
     author_email="kimkj@usc.edu",
-    url="https://github.com/minjunkevink/molmo-handtracker",
+    url="https://github.com/minjunkevink/molmo_cotrack",
 ) 
